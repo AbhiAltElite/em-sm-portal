@@ -7,8 +7,36 @@ const base = () => '#c=' + TOKEN;
 let pendingFlash = null;
 let me = '';
 
-function go(hash, flash) {
+let freshPost = null;
+let listFilter = 'all';
+
+/*
+ * Every request to Google takes 1.5–2.5 s however little it does, so the portal shows what it already has at once
+ * and refreshes quietly. The post list is kept on this device; post details (which include reviewers' email
+ * addresses) only until the tab is closed. Nothing here contains the coordinator link itself.
+ */
+const CACHE_PREFIX = 'sm-coord-' + TOKEN.slice(0, 8) + '-';
+function cacheGet(store, key) {
+  try { return JSON.parse(store.getItem(CACHE_PREFIX + key) || 'null'); } catch (e) { return null; }
+}
+function cacheSet(store, key, value) {
+  try { store.setItem(CACHE_PREFIX + key, JSON.stringify(value)); } catch (e) { /* storage full or blocked */ }
+}
+function cacheClear() {
+  try {
+    [localStorage, sessionStorage].forEach(store =>
+      Object.keys(store).filter(k => k.indexOf('sm-coord-') === 0).forEach(k => store.removeItem(k)));
+  } catch (e) { /* ignore */ }
+}
+function remember(d) {
+  if (d && d.post) cacheSet(sessionStorage, 'post:' + d.post.id, { me: d.me, post: d.post });
+  if (d && d.me) cacheSet(localStorage, 'me', d.me);
+}
+
+/** fresh = a coordinator action's reply that already contains the updated post (no extra request needed). */
+function go(hash, flash, fresh) {
   pendingFlash = flash || null;
+  freshPost = fresh && fresh.post ? fresh : null;
   if (location.hash === hash) route(); else location.hash = hash;
 }
 
@@ -16,28 +44,51 @@ async function route() {
   const p = hashParams();
   if ((p.get('c') || '') !== TOKEN) { location.reload(); return; }
   const flash = pendingFlash;
+  const fresh = freshPost;
   pendingFlash = null;
+  freshPost = null;
   window.scrollTo(0, 0);
   const view = p.get('view') === 'new' ? 'new' : 'list';
+  const postId = p.get('post');
   setNav(view);
-  showLoading();
+  if (!me) setMe(cacheGet(localStorage, 'me') || '');
   try {
     if (!/^[0-9a-f]{64}$/.test(TOKEN)) {
       throw Object.assign(new Error('This coordinator link is incomplete. Please open the full link from your email.'), { code: 'link' });
     }
     if (view === 'new') {
-      if (!me) setMe((await api({ op: 'coord.list', c: TOKEN })).me);   // checks the link before showing the form
-      app().replaceChildren(newView(flash));
-    } else if (p.get('post')) {
-      const d = await api({ op: 'coord.post', c: TOKEN, post: p.get('post') });
-      setMe(d.me);
-      app().replaceChildren(postView(d.post, flash));
-    } else {
-      const d = await api({ op: 'coord.list', c: TOKEN });
+      app().replaceChildren(newView(flash));                 // no request needed; the link is checked on submit
+      return;
+    }
+    if (postId) {
+      if (fresh) {
+        remember(fresh);
+        setMe(fresh.me);
+        app().replaceChildren(postView(fresh.post, flash));
+        return;
+      }
+      const cached = cacheGet(sessionStorage, 'post:' + postId);
+      if (cached) app().replaceChildren(postView(cached.post, flash, true)); else showLoading();
+      const d = await api({ op: 'coord.post', c: TOKEN, post: postId });
+      remember(d);
+      if (hashParams().get('post') === postId) {
+        setMe(d.me);
+        app().replaceChildren(postView(d.post, flash));
+      }
+      return;
+    }
+    const cached = cacheGet(localStorage, 'list');
+    if (cached) app().replaceChildren(listView(cached.posts, flash, true)); else showLoading();
+    const d = await api({ op: 'coord.list', c: TOKEN });
+    cacheSet(localStorage, 'list', { posts: d.posts });
+    remember(d);
+    const now = hashParams();
+    if (!now.get('post') && now.get('view') !== 'new') {
       setMe(d.me);
       app().replaceChildren(listView(d.posts, flash));
     }
   } catch (err) {
+    if (err.code === 'link') cacheClear();
     showError(err, route);
   }
 }
@@ -49,7 +100,7 @@ function setNav(view) {
     el('span', { class: 'who', id: 'me' }, me));
 }
 function setMe(email) {
-  me = email;
+  me = email || '';
   const n = document.getElementById('me');
   if (n) n.textContent = email;
 }
@@ -83,7 +134,7 @@ function action(form, btn, validate, run) {
 }
 
 // ── All posts
-function listView(posts, flash) {
+function listView(posts, flash, stale) {
   const filters = [['all', 'All'], ['Open', 'Awaiting approval'], ['Ready', 'Ready to post'], ['Closed', 'Closed']];
   const tbody = el('tbody');
   const fill = key => {
@@ -98,17 +149,19 @@ function listView(posts, flash) {
           posts.length ? 'No posts in this view.' : 'No posts yet. Use "New post" to create the first one.'))]));
   };
   const bar = el('div', { class: 'filters', role: 'group', 'aria-label': 'Filter posts' }, filters.map(([key, label], i) =>
-    el('button', { type: 'button', class: i === 0 ? 'on' : '', onclick: e => {
+    el('button', { type: 'button', class: key === listFilter ? 'on' : '', onclick: e => {
+      listFilter = key;
       bar.querySelectorAll('button').forEach(b => b.classList.remove('on'));
       e.currentTarget.classList.add('on');
       fill(key);
     } }, label + ' (' + (key === 'all' ? posts.length : posts.filter(p => p.status === key).length) + ')')));
-  fill('all');
+  fill(listFilter);
   return el('div', {},
     el('div', { class: 'wrap' },
       flash ? message(flash.kind, flash.text) : null,
       el('div', { class: 'toolbar' }, el('h1', { class: 'flush' }, 'Posts'),
-        el('div', { class: 'toolbar-actions' }, bar, el('a', { href: base() + '&view=new', class: 'btn' }, 'New post'))),
+        el('div', { class: 'toolbar-actions' }, stale ? el('span', { class: 'hint' }, 'Updating…') : null,
+          bar, el('a', { href: base() + '&view=new', class: 'btn' }, 'New post'))),
       el('div', { class: 'table-wrap' }, el('table', { class: 'list' },
         el('thead', {}, el('tr', {}, el('th', {}, 'Post'), el('th', {}, 'Status'), el('th', {}, 'Approvals'),
                                      el('th', { class: 'hide-sm' }, 'Last updated'))),
@@ -117,12 +170,12 @@ function listView(posts, flash) {
 }
 
 // ── One post
-function postView(p, flash) {
+function postView(p, flash, stale) {
   const open = p.status !== 'Closed';
   const approvers = p.people.filter(x => x.role === 'Approver');
   const done = approvers.filter(x => isApproved(x.status)).length;
   const pending = approvers.filter(x => !isApproved(x.status));
-  const reload = text => go(base() + '&post=' + encodeURIComponent(p.id), { kind: 'ok', text: text });
+  const reload = (text, res) => go(base() + '&post=' + encodeURIComponent(p.id), { kind: 'ok', text: text }, res);
 
   const reviewers = el('div', { class: 'panel plain' },
     el('h2', {}, 'Reviewers'),
@@ -135,7 +188,8 @@ function postView(p, flash) {
       el('td', {}, status(x.status)))))));
 
   const panels = [];
-  if (open && pending.length) {
+  if (stale) panels.push(el('div', { class: 'panel' }, 'Loading the latest status…'));
+  if (!stale && open && pending.length) {
     const note = textarea('note', '', 2, 'e.g. We plan to post on Friday; kindly review by Thursday.');
     const btn = el('button', { class: 'btn', type: 'submit' }, 'Send reminder');
     const f = el('form', { class: 'stack', novalidate: true },
@@ -147,7 +201,7 @@ function postView(p, flash) {
     const emails = () => [...f.querySelectorAll('input[type=checkbox]:checked')].map(i => i.value);
     action(f, btn, () => (emails().length ? '' : 'Select at least one person.'), async () => {
       const res = await api({ op: 'coord.remind', c: TOKEN, post: p.id, emails: emails(), note: note.value });
-      reload('Reminder sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.');
+      reload('Reminder sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.', res);
     });
     panels.push(el('div', { class: 'panel' }, el('h3', {}, 'Send reminder'), f));
 
@@ -157,12 +211,12 @@ function postView(p, flash) {
     const f2 = el('form', { class: 'stack', novalidate: true },
       el('label', { class: 'field' }, 'Approver', who), el('label', { class: 'field' }, 'How it was received', how), btn2);
     action(f2, btn2, () => (how.value.trim() ? '' : 'Say how the approval was received.'), async () => {
-      await api({ op: 'coord.offline', c: TOKEN, post: p.id, email: who.value, how: how.value });
-      reload('Approval recorded.');
+      const res = await api({ op: 'coord.offline', c: TOKEN, post: p.id, email: who.value, how: how.value });
+      reload('Approval recorded.', res);
     });
     panels.push(el('details', { class: 'panel' }, el('summary', {}, 'Record an approval received offline'), f2));
   }
-  if (open) {
+  if (!stale && open) {
     const text = textarea('text', p.text, 8);
     const photos = photoField('Replace photographs', 'Leave empty to keep the current photographs.');
     const note = textarea('note', '', 2, 'e.g. Corrected the award name as per the certificate.');
@@ -182,7 +236,7 @@ function postView(p, flash) {
       async () => {
         const res = await api({ op: 'coord.revise', c: TOKEN, post: p.id, text: text.value, note: note.value, approvers: addA.value,
                                 fyi: addF.value, reapprove: again.checked, photos: photos.values });
-        reload('Version ' + res.version + ' sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.');
+        reload('Version ' + res.version + ' sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.', res);
       });
     panels.push(el('details', { class: 'panel' }, el('summary', {}, 'Revise post'), f));
 
@@ -190,12 +244,12 @@ function postView(p, flash) {
     const f3 = el('form', { novalidate: true }, btn3);
     action(f3, btn3, () => (confirm('Close "' + p.title + '"? All review links for it will stop working.') ? '' : 'Not closed.'),
       async () => {
-        await api({ op: 'coord.close', c: TOKEN, post: p.id });
-        reload('Post closed. All review links for it have stopped working.');
+        const res = await api({ op: 'coord.close', c: TOKEN, post: p.id });
+        reload('Post closed. All review links for it have stopped working.', res);
       });
     panels.push(el('div', { class: 'panel plain' }, el('h3', {}, 'Close post'),
       el('p', { class: 'hint' }, 'Close the post after it has been published. All review links for it stop working.'), f3));
-  } else {
+  } else if (!stale) {
     panels.push(el('div', { class: 'panel' }, 'This post is closed. Its review links no longer work.'));
   }
 
@@ -254,7 +308,7 @@ function newView(flash) {
       const res = await api({ op: 'coord.create', c: TOKEN, title: title.value, text: text.value, approvers: approvers.value,
                               fyi: fyi.value, note: note.value, photos: photos.values });
       go(base() + '&post=' + encodeURIComponent(res.id),
-         { kind: 'ok', text: 'Post created and sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.' });
+         { kind: 'ok', text: 'Post created and sent to ' + res.sent + ' ' + (res.sent === 1 ? 'person' : 'people') + '.' }, res);
     });
   return el('div', {},
     el('div', { class: 'wrap' },
