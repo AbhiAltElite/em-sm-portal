@@ -3,8 +3,8 @@
   --ink: #1b1f24; --ink-2: #3d4450; --muted: #646b76; --rule: #dde1e6; --rule-2: #eceef1;
   --panel: #f6f7f9; --navy: #0b3d91; --navy-2: #082f70; --navy-tint: #eef3fb;
   --ok: #1e6b34; --bad: #a3261d; --wait: #8a5a00; --neutral: #646b76;
-  --sans: "Source Sans 3", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
-  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --serif: Georgia, "Times New Roman", serif;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: #fff; color: var(--ink); font: 16px/1.6 var(--sans); }

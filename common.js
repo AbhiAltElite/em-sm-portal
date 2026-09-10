@@ -111,14 +111,40 @@ function historySection(comments) {
     })) : el('p', { class: 'muted' }, 'No remarks yet.'));
 }
 
-function photoGrid(photos) {
+/** Defers private image data until a thumbnail is near the viewport or explicitly opened. */
+function photoGrid(photos, loadPhoto) {
   return el('div', { class: 'photos' }, photos.map((ph, i) => {
     const cap = 'Photograph ' + (i + 1) + ' of ' + photos.length;
-    return el('figure', {},
-      el('button', { class: 'ph', type: 'button', 'aria-label': 'Open ' + cap.toLowerCase(),
-                     onclick: () => ph.src && openPhoto(ph.src, cap) },
-        ph.src ? el('img', { src: ph.src, alt: cap }) : 'Unavailable'),
-      el('figcaption', {}, 'Photograph ' + (i + 1)));
+    const img = el('img', { alt: cap, loading: 'lazy', decoding: 'async' });
+    const button = el('button', { class: 'ph', type: 'button', 'aria-label': 'Open ' + cap.toLowerCase() }, 'Loading…');
+    let pending;
+    const load = () => {
+      if (ph.src) return Promise.resolve(ph.src);
+      if (!loadPhoto) return Promise.resolve('');
+      if (!pending) pending = loadPhoto(ph.id).then(data => {
+        ph.src = data.src || '';
+        button.replaceChildren(ph.src ? img : document.createTextNode('Unavailable'));
+        if (ph.src) img.src = ph.src;
+        return ph.src;
+      }).catch(() => {
+        button.replaceChildren(document.createTextNode('Unavailable'));
+        return '';
+      });
+      return pending;
+    };
+    button.addEventListener('click', async () => {
+      const src = await load();
+      if (src) openPhoto(src, cap);
+    });
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(e => e.isIntersecting)) { observer.disconnect(); load(); }
+      }, { rootMargin: '300px' });
+      observer.observe(button);
+    } else {
+      load();
+    }
+    return el('figure', {}, button, el('figcaption', {}, 'Photograph ' + (i + 1)));
   }));
 }
 

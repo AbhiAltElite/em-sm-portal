@@ -175,7 +175,8 @@ function postView(p, flash) {
       el('label', { class: 'field' }, 'What changed? ', el('span', { class: 'opt-note' }, '(shown to reviewers)'), note),
       el('label', { class: 'field' }, 'Add approvers ', el('span', { class: 'opt-note' }, '(optional, one per line: Name, email)'), addA),
       el('label', { class: 'field' }, 'Add people for information ', el('span', { class: 'opt-note' }, '(optional)'), addF),
-      el('label', { class: 'inline' }, again, 'Ask approvers to approve again'),
+      el('label', { class: 'inline' }, again, 'Ask approvers to approve again (recommended)'),
+      el('span', { class: 'hint' }, 'If unticked, approvals already given carry over to the new version. This is noted in the review history and in the mail.'),
       btn);
     action(f, btn, () => (!text.value.trim() ? 'Post text is required.' : photos.busy ? 'Please wait until the photographs are prepared.' : ''),
       async () => {
@@ -211,7 +212,7 @@ function postView(p, flash) {
         el('div', { class: 'main' },
           el('section', {}, el('h2', {}, 'Post text'), el('div', { class: 'post-text' }, p.text)),
           p.photos.length ? el('section', {}, el('h2', {}, 'Photographs ', el('span', { class: 'n' }, '(' + p.photos.length + ')')),
-            photoGrid(p.photos)) : null,
+            photoGrid(p.photos, id => api({ op: 'coord.photo', c: TOKEN, post: p.id, photo: id }))) : null,
           historySection(p.comments)),
         el('aside', {}, reviewers, panels))),
     footer());
@@ -237,7 +238,7 @@ function newView(flash) {
     el('label', { class: 'field' }, el('span', { class: 'row' }, el('span', {}, 'Post text'), count), text),
     photos.node,
     el('label', { class: 'field' }, 'Approvers ', el('span', { class: 'opt-note' }, '(must approve)'), approvers,
-      el('span', { class: 'hint' }, 'One person per line: Name, email. External (non-IITH) addresses are fine.')),
+      el('span', { class: 'hint' }, 'One person per line: Name, email. External (non-IITH) addresses are fine. For people added before, the email alone is enough: their saved name and greeting (Contacts tab in the Sheet) are used.')),
     el('details', { class: 'guide' }, el('summary', {}, 'Who should approve?'), el('ul', {},
       el('li', {}, el('b', {}, 'Department-level'), ' (awards recommended by the department, department events): student(s), guide, HoD / DPGC, social media and website coordinators.'),
       el('li', {}, el('b', {}, 'Individual achievement'), ': student, guide / faculty advisor, social media and website coordinators, other direct stakeholders. Add HoD and DPGC (PG/PhD) or DUGC (UG) under For information.'))),
