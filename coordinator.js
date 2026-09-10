@@ -270,7 +270,7 @@ function textarea(name, value, rows, placeholder) {
   return t;
 }
 
-/** Photos are resized in the browser (max 1280 px JPEG) as soon as they are chosen. */
+/** Photos are resized in the browser as soon as they are chosen: a 1280 px photo and a small 480 px preview. */
 function photoField(label, hint) {
   const state = { values: [], busy: false };
   const thumbs = el('div', { class: 'thumbs' });
@@ -285,9 +285,9 @@ function photoField(label, hint) {
     note.textContent = 'Preparing ' + files.length + ' photograph' + (files.length === 1 ? '' : 's') + '…';
     try {
       for (const file of files) {
-        const url = await resize(file);
-        state.values.push(url);
-        thumbs.append(el('img', { src: url, alt: file.name }));
+        const photo = await resize(file);            // { full: 1280 px, thumb: 480 px preview }
+        state.values.push(photo);
+        thumbs.append(el('img', { src: photo.thumb, alt: file.name }));
       }
       note.textContent = files.length + ' photograph' + (files.length === 1 ? '' : 's') + ' ready' +
         (input.files.length > MAX_PHOTOS ? ' (only the first ' + MAX_PHOTOS + ' are used).' : '.');
@@ -308,16 +308,20 @@ function resize(file) {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * scale);
-      c.height = Math.round(img.height * scale);
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const draw = (max, quality) => {
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        return c.toDataURL('image/jpeg', quality);
+      };
+      const out = { full: draw(1280, 0.82), thumb: draw(480, 0.72) };
       URL.revokeObjectURL(url);
-      resolve(c.toDataURL('image/jpeg', 0.82));
+      resolve(out);
     };
     img.onerror = () => reject(new Error('Could not read "' + file.name + '". Please use JPG or PNG photographs.'));
     img.src = url;

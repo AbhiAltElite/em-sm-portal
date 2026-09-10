@@ -43,6 +43,7 @@ function verb(type) {
 
 /** Calls the Apps Script API. credentials: 'omit' = no Google cookies, so multiple signed-in accounts don't matter. */
 async function api(payload) {
+  const started = performance.now();
   let res;
   try {
     res = await fetch(window.SM_CONFIG.apiUrl, {
@@ -57,6 +58,8 @@ async function api(payload) {
   } catch (e) {
     throw new Error('The server returned an unexpected response. Please try again in a minute.');
   }
+  console.info('[SM] ' + payload.op + ': ' + Math.round(performance.now() - started) + ' ms in total, ' +
+               (body.ms == null ? '?' : body.ms) + ' ms of work on the server');   // for diagnosing slow loads
   if (!body.ok) {
     const err = new Error(body.error || 'Something went wrong. Please try again.');
     err.code = body.code || '';
@@ -111,38 +114,43 @@ function historySection(comments) {
     })) : el('p', { class: 'muted' }, 'No remarks yet.'));
 }
 
-/** Defers private image data until a thumbnail is near the viewport or explicitly opened. */
+/**
+ * Photo grid. Posts created in the portal include small previews in the page data, so the grid needs no extra
+ * request; the full photo is fetched only when someone opens it. Older photos (no preview) load when scrolled into view.
+ */
 function photoGrid(photos, loadPhoto) {
+  const viewer = () => document.getElementById('viewer');
   return el('div', { class: 'photos' }, photos.map((ph, i) => {
     const cap = 'Photograph ' + (i + 1) + ' of ' + photos.length;
-    const img = el('img', { alt: cap, loading: 'lazy', decoding: 'async' });
-    const button = el('button', { class: 'ph', type: 'button', 'aria-label': 'Open ' + cap.toLowerCase() }, 'Loading…');
+    const img = el('img', { alt: cap, decoding: 'async' });
+    const button = el('button', { class: 'ph', type: 'button', 'aria-label': 'Open ' + cap.toLowerCase() }, ph.thumb ? img : 'Loading…');
+    if (ph.thumb) img.src = ph.thumb;
     let pending;
-    const load = () => {
+    const loadFull = () => {
       if (ph.src) return Promise.resolve(ph.src);
       if (!loadPhoto) return Promise.resolve('');
-      if (!pending) pending = loadPhoto(ph.id).then(data => {
-        ph.src = data.src || '';
-        button.replaceChildren(ph.src ? img : document.createTextNode('Unavailable'));
-        if (ph.src) img.src = ph.src;
-        return ph.src;
-      }).catch(() => {
-        button.replaceChildren(document.createTextNode('Unavailable'));
-        return '';
-      });
+      if (!pending) pending = loadPhoto(ph.id).then(data => (ph.src = (data && data.src) || '')).catch(() => '');
       return pending;
     };
+    const showInGrid = src => {
+      if (ph.thumb) return;
+      if (src) { img.src = src; button.replaceChildren(img); } else button.textContent = 'Unavailable';
+    };
     button.addEventListener('click', async () => {
-      const src = await load();
-      if (src) openPhoto(src, cap);
+      if (ph.thumb) openPhoto(ph.thumb, cap);                  // the preview opens at once …
+      const src = await loadFull();
+      if (src && (!ph.thumb || !viewer().hidden)) openPhoto(src, cap);   // … and is replaced by the full photo
+      showInGrid(src);
     });
-    if ('IntersectionObserver' in window) {
-      const observer = new IntersectionObserver(entries => {
-        if (entries.some(e => e.isIntersecting)) { observer.disconnect(); load(); }
-      }, { rootMargin: '300px' });
-      observer.observe(button);
-    } else {
-      load();
+    if (!ph.thumb) {
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver(entries => {
+          if (entries.some(e => e.isIntersecting)) { observer.disconnect(); loadFull().then(showInGrid); }
+        }, { rootMargin: '300px' });
+        observer.observe(button);
+      } else {
+        loadFull().then(showInGrid);
+      }
     }
     return el('figure', {}, button, el('figcaption', {}, 'Photograph ' + (i + 1)));
   }));
